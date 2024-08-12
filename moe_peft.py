@@ -282,7 +282,8 @@ if __name__ == "__main__":
             max_concurrent_jobs=config.get("eval_lora_simultaneously_num", None),
             retrying_steps=config.get("eval_rollback_retrying_steps", 20),
             max_seq_len=config["cutoff_len"],
-            save_file=config.get("evaluate_result", None),
+            # save_file=config.get("evaluate_result", None),
+            save_file="evaluate_result"
         )
     else:
         torch.cuda.memory._record_memory_history(max_entries=80000)

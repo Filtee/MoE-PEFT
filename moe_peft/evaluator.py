@@ -240,7 +240,7 @@ def _compute_result(model, configs, save_file):
         results.append(result)
 
     if save_file is not None:
-        with open(save_file, "w") as f:
+        with open(save_file, "a") as f:
             json.dump(results, f, indent=4)
         logging.info(f"saving evaluation result to {save_file}")
     else:
