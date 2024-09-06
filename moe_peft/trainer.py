@@ -312,14 +312,12 @@ def train(
         input_args = dispatcher.get_train_data()
 
         # Using profiler to record the GPU mem usage.
-        with torch.profiler.profile(
-            activities=[
-                torch.profiler.ProfilerActivity.CUDA], record_shapes=True
-        ) as prof:
+        with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA], record_shapes=True) as prof:
             outputs = model.forward(input_args)
 
-        with open("moe_peft_profiler.json", "a") as prof_f:
-            prof_f.write(prof.key_averages().table(sort_by="cuda_memory_usage"))
+            prof_dir = f"{save_dir}{os.sep}profiler.json"
+            with open(prof_dir, "a") as prof_f:
+                prof_f.write(prof.key_averages().table(sort_by="cuda_memory_usage"))
 
         total_loss = _compute_loss(config_dict, outputs)
 
