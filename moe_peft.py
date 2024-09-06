@@ -285,6 +285,7 @@ if __name__ == "__main__":
             save_file=config.get("evaluate_result", None),
         )
     else:
+        torch.cuda.memory._record_memory_history(max_entries=80000)
         moe_peft.train(
             model=model,
             tokenizer=tokenizer,
@@ -294,4 +295,7 @@ if __name__ == "__main__":
             cutoff_len=config["cutoff_len"],
             save_step=config["save_step"],
             save_dir=args.dir,
+            device=args.device,
         )
+        torch.cuda.memory._dump_snapshot(f"{args.dir}{os.sep}profiler.pickle")
+        torch.cuda.memory._record_memory_history(enabled=None)

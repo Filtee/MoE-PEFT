@@ -3,6 +3,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Dict, List, Optional, Union
 
 import torch
@@ -279,6 +280,7 @@ def train(
     cutoff_len: Optional[int] = None,
     save_step: Optional[int] = None,
     save_dir: Optional[str] = None,
+    device: Optional[str] = None,
 ) -> None:
     if cutoff_len is None:
         cutoff_len = model.config_.max_seq_len_
@@ -308,37 +310,45 @@ def train(
 
     evaluate_results = []
 
+    def trace_handler(prof: torch.profiler.profile):
+        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        filename = f"visual_mem_{timestamp}"
+        prof.export_chrome_trace(f"{filename}.json")
+        prof.export_memory_timeline(f"{filename}.html", device=device)
+
     while not dispatcher.check_task_done():
-        input_args = dispatcher.get_train_data()
+        with torch.profiler.profile(
+            activities=[torch.profiler.ProfilerActivity.CPU, torch.profiler.ProfilerActivity.CUDA],
+            schedule=torch.profiler.schedule(wait=0, warmup=0, active=6, repeat=1),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+            on_trace_ready=trace_handler,
+        ) as prof:
+            input_args = dispatcher.get_train_data()
+            with torch.autograd.profiler.record_function("### forward ###"):
+                outputs = model.forward(input_args)
 
-        # Using profiler to record the GPU mem usage.
-        with torch.profiler.profile(activities=[torch.profiler.ProfilerActivity.CUDA], record_shapes=True) as prof:
-            outputs = model.forward(input_args)
+            with torch.autograd.profiler.record_function("### backward ###"):
+                total_loss = _compute_loss(config_dict, outputs)
+                total_loss.backward()
 
-            prof_dir = f"{save_dir}{os.sep}profiler.json"
-            with open(prof_dir, "a") as prof_f:
-                prof_f.write(prof.key_averages().table(sort_by="cuda_memory_usage"))
+            evaluate_configs = []
+            with torch.autograd.profiler.record_function("### optimizer ###"):
+                for output in outputs:
+                    config = config_dict[output.adapter_name]
+                    config.step()
 
-        total_loss = _compute_loss(config_dict, outputs)
+                    if save_step is not None and config.training_steps_ % save_step == 0:
+                        save_adapter_weight(
+                            model, config, save_dir, f"{config.training_steps_}"
+                        )
 
-        total_loss.backward()
-
-        evaluate_configs = []
-
-        for output in outputs:
-            config = config_dict[output.adapter_name]
-            config.step()
-
-            if save_step is not None and config.training_steps_ % save_step == 0:
-                save_adapter_weight(
-                    model, config, save_dir, f"{config.training_steps_}"
-                )
-
-            if (
-                config.evaluate_steps is not None
-                and config.training_steps_ % config.evaluate_steps == 0
-            ):
-                evaluate_configs.extend(config.evaluate_configs_)
+                    if (
+                        config.evaluate_steps is not None
+                        and config.training_steps_ % config.evaluate_steps == 0
+                    ):
+                        evaluate_configs.extend(config.evaluate_configs_)
 
         evaluate_results.extend(
             _perform_evaluate(
