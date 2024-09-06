@@ -4,10 +4,10 @@ import random
 
 model_dir = "/workspace/models/"
 # task_list = {"arc-e", "arc-c", "boolq", "obqa", "piqa", "siqa", "hellaswag", "winogrande"}
-task_list = {"arc-e", "arc-c", "boolq", "obqa", "piqa", "siqa", "hellaswag", "winogrande"}
-model_list = {"microsoft/Phi-3-mini-128k-instruct"}
+task_list = {"arc-e"}
+model_list = {"google/gemma-2b"}
 
-peft_methods = {"loraplus", "rslora"}
+peft_methods = {"lora"}
 
 config_command = f"python launch.py gen"
 run_command = f"python launch.py run"
@@ -33,10 +33,10 @@ run_suffix = {
 
 def call_gen(peft_method, tasks, name_prefix, multi_task):
     if multi_task:
-        config = (f"{config_command} --tasks \"{tasks}\" --adapter_name multi_{peft_method} --batch_size 64 --micro_batch_size 32"
+        config = (f"{config_command} --tasks \"{tasks}\" --adapter_name multi_{peft_method} --batch_size 16 --micro_batch_size 8"
                   f" --file_name multi_{peft_method}.json {config_suffix.get(peft_method, '')} --multi_task")
     else:
-        config = (f"{config_command} --tasks {tasks} --adapter_name {name_prefix} --batch_size 64 --micro_batch_size 32"
+        config = (f"{config_command} --tasks {tasks} --adapter_name {name_prefix} --batch_size 16 --micro_batch_size 8"
                   f" --file_name {name_prefix}.json {config_suffix.get(peft_method, '')}")
     os.system(config)
     print(config)
