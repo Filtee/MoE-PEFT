@@ -148,19 +148,19 @@ class Dispatcher:
     config_ = None
     tokenizer_: Tokenizer = None
 
-    # all train task
+    # all train tasks
     ready_train_task_: List[TrainTask] = None
     running_train_task_: List[TrainTask] = None
     done_train_task_: List[TrainTask] = None
 
-    # train task in event
+    # train tasks in event
     train_task_in_event_: Event = None
     train_task_out_event_: Event = None
 
-    # the number of max candidate training lora model
+    # the number of max candidates when training lora model
     # can chose train data from this dataset
     train_lora_candidate_num_: int = 0
-    # the number of simultaneously train lora model
+    # the number of tasks when simultaneously training lora model
     train_lora_simultaneously_num_: int = 0
 
     strategy_: str = ""
@@ -189,7 +189,7 @@ class Dispatcher:
         self.train_lora_simultaneously_num_ = max_concurrent_jobs
         self.strategy_ = strategy
 
-        # create ready task
+        # create ready tasks
         for config_class in configs:
             kwargs = config_class.dispatcher_context()
             self.ready_train_task_.append(
@@ -211,14 +211,14 @@ class Dispatcher:
             win = task_len[sidx : sidx + self.train_lora_simultaneously_num_]
             need_pad_len = 0
             for i in range(1, len(win)):
-                # aligin to the max seq len
+                # align to the max seq len
                 need_pad_len += abs(win[i][1] - win[0][1])
             if need_pad_len < min_need_pad_len:
                 min_need_pad_len = need_pad_len
                 win_start_idx = sidx
         # the result is win_start_idx
         result_win = task_len[
-            win_start_idx : win_start_idx + self.train_lora_simultaneously_num_
+            win_start_idx: win_start_idx + self.train_lora_simultaneously_num_
         ]
         ret_train_data = {}
         for result_task_len in result_win:
