@@ -1,244 +1,239 @@
-#!/usr/bin/env python3
+import copy
 import json
 import os
+from encodings.punycode import selective_len
 
-import datasets as hf_datasets
 import fire
+from yaml import compose
 
-file_path = "templates"
-work_path = os.path.dirname(os.path.abspath(__file__))
+from moe_peft.tasks import task_dict
+
+WORK_PATH = os.path.dirname(os.path.abspath(__file__))
+CONFIG_SAVING_PATH = f"{WORK_PATH}{os.sep}save_configs"
+LOG_SAVING_PATH = f"{WORK_PATH}{os.sep}save_logs"
+
+BASE_EDITABLE_DICT = {
+    "lr": int,
+    "scheduler_type": str,
+    "warmup_steps": int,
+    "batch_size": int,
+    "micro_batch_size": int,
+    "evaluate_steps": int,
+    "evaluate_batch_size": int,
+    "num_epochs": int,
+}
+
+PEFT_EDITABLE_DICT = {
+    "lora": {},
+    "dora": {
+        "use_dora",
+    },
+    "lora_plus": {
+        "loraplus_lr_ratio",
+    },
+    "rslora": {
+        "use_rslora",
+    },
+    "dynmole": {
+        "entropy_threshold",
+        "entropy_index",
+        "keep_top_k",
+        "router_dyn_loss_coef",
+    },
+}
 
 
-def load_dataset(path: str):
-    if path.endswith(".json") or path.endswith(".jsonl"):
-        data = hf_datasets.load_dataset("json", data_files=path)
-    elif ":" in path:
-        split = path.split(":")
-        data = hf_datasets.load_dataset(split[0], split[1])
-    else:
-        data = hf_datasets.load_dataset(path)
-    return data
+def print_red(message):
+    print('\033[0;31m' + message + '\033[0m')
+
+
+def print_green(message):
+    print('\033[0;32m' + message + '\033[0m')
+
+
+def get_tasks():
+    input_tasks = []
+    while True:
+        task = input("Tasks? (Only one task for each input round): ").strip()
+
+        if task == "" and input_tasks != []:
+            break
+        elif task == "" and input_tasks == []:
+            print_red("Please enter at least one task!")
+            continue
+        elif task not in task_dict.keys():
+            print_red(f"Wrong input! The task {task} is not in the task dict!")
+            continue
+        elif task in input_tasks:
+            print_red(f"Wrong input! Task {task} has already input!")
+            continue
+
+        input_tasks.append(task)
+    return input_tasks
+
+
+def get_peft_method():
+    while True:
+        peft_method = input("Plz input the peft method: ").strip()
+        if peft_method in PEFT_EDITABLE_DICT.keys():
+            break
+        else:
+            print_red("Wrong Input!")
+    return null
+
+
+def edit_params(lora_config, editable_list):
+    for param in editable_list:
+        while True:
+            input_param = input(f">>> Input {param} (DEFAULT {lora_config[param]}): ").strip()
+
+            if input_param == "":
+                break
+            # Try to cast the input data type.
+            try:
+                target_type = type(lora_config[param])
+                lora_config[param] = target_type(input_param)
+                break
+            except ValueError as _:
+                print_red("Wrong input data type!")
+                continue
+
+
+def edit_template_config(
+    tasks: list,
+    peft_method: str,
+):
+    template_dir = f"{WORK_PATH}{os.sep}templates{os.sep}{peft_method}.json"
+    with open(template_dir, "r", encoding="utf8") as fp:
+        template = json.load(fp)
+
+    lora_template = template["lora"].pop()
+    lora_config_pool, cnt = {}, 0
+
+    # Edit params for each task.
+    for task in tasks:
+        lora_config = copy.deepcopy(lora_template)
+        lora_config["task_name"] = task + f"_{cnt}"
+        print_green(f"Input parameters for {task}...")
+
+        # Edit base template params.
+        while True:
+            choice = input(f"? Edit base config params: [y/N] ").strip().lower()
+            choice = "n" if choice == "" else choice
+            if choice in {"y", "n", "yes", "no"}:
+                break
+        if choice == "y" or choice == "yes":
+            edit_params(lora_config, BASE_EDITABLE_DICT)
+
+        # Edit template params basing on different PEFT methods.
+        edit_params(lora_config, PEFT_EDITABLE_DICT[peft_method])
+
+        # Add this lora config to the POOL.
+        lora_config_pool[task] = lora_config
+        cnt += 1
+
+    # TODO: Ask the user again to confirm the edit.
+
+    for lora_config in lora_config_pool.values():
+        template["lora"].append(lora_config)
+    return template
+
+
+def generate_config():
+    if not os.path.exists(CONFIG_SAVING_PATH):
+        os.makedirs(CONFIG_SAVING_PATH)
+    if not os.path.exists(LOG_SAVING_PATH):
+        os.makedirs(LOG_SAVING_PATH)
+
+    # Get task_name.
+    task_name = input("Plz input the name of config file: ").strip()
+
+    # Get config.
+    tasks = get_tasks()
+
+    peft_method = get_peft_method()
+    template = edit_template_config(tasks, peft_method)
+
+    # Save config.
+    config_dir = f"{CONFIG_SAVING_PATH}{task_name}.json"
+    with open(config_dir, "w", encoding="utf8") as fp:
+        json.dump(template, fp, indent=4)
+
+    print_green(f"Configuration file saved to {config_dir}")
 
 
 def compose_command(
     base_model: str,
+    cuda_device: int = 0,
     config: str = "moe_peft.json",
-    inference: bool = False,
-    evaluate: bool = False,
-    load_adapter: bool = False,
-    random_seed: int = 42,
-    cuda_device: int = None,
     log_file: str = "moe_peft.log",
-    overwrite: bool = False,
-    attn_impl: str = None,
-    sliding_window: bool = False,
-    use_cache: bool = True,
-    quantize: str = None,
+    random_seed: int = 42,
+    attn_impl: str = "eager",
     dtype: str = "bf16",
-    tf32: bool = False,
+    quantize: str = None,
 ):
+    assert base_model is not None
+    assert dtype in ("bf16", "bf32", "fp32")
     assert quantize in (None, "4bit", "8bit")
-    assert dtype in ("fp32", "fp16", "bf16")
-    command = "python moe_peft.py"
-    if cuda_device is not None:
-        command = f"CUDA_VISIBLE_DEVICES={cuda_device} " + command
-    command += f" --base_model {base_model}"
-    command += f" --config {config}"
-    if inference:
-        command += " --inference"
-    if evaluate:
-        command += " --evaluate"
-    if load_adapter:
-        command += " --load_adapter"
-    command += f" --seed {random_seed}"
-    command += f" --log_file {log_file}"
-    if overwrite:
-        command += " --overwrite"
-    if attn_impl is not None:
-        command += f" --attn_impl {attn_impl}"
-    if sliding_window:
-        command += " --sliding_window"
-    if not use_cache:
-        command += " --disable_cache"
-    if quantize is not None:
-        command += f" --load_{quantize}"
-    if dtype in ("fp16", "bf16"):
-        command += f" --{dtype}"
-    if tf32:
-        command += " --tf32"
-    return os.system(command)
 
-
-def update_record(dict_: dict, key_, value_):
-    if value_ is not None:
-        dict_[key_] = value_
-
-
-def gen_config(
-    # essential
-    template: str,
-    tasks: str,
-    # optional
-    adapter_name: str = None,
-    file_name: str = "moe_peft.json",
-    data_path: str = None,
-    multi_task: bool = False,
-    append: bool = False,
-    # default value provided by template
-    prompt_template: str = None,
-    cutoff_len: int = None,
-    save_step: int = None,
-    lr_scheduler: str = None,
-    warmup_steps: float = None,
-    learning_rate: float = None,
-    batch_size: int = None,
-    micro_batch_size: int = None,
-    evaluate_steps: int = None,
-    evaluate_batch_size: int = None,
-    num_epochs: int = None,
-    loraplus_lr_ratio: float = None,
-    use_dora: bool = None,
-    use_rslora: bool = None,
-    group_by_length: bool = None,
-):
-    import moe_peft
-
-    template = f"{work_path}{os.sep}{file_path}{os.sep}{template}.json"
-    config_dir = f"{work_path}{os.sep}{file_name}"
-
-    with open(template, "r", encoding="utf8") as fp:
-        template_obj = json.load(fp)
-
-    update_record(template_obj, "cutoff_len", cutoff_len)
-    update_record(template_obj, "save_step", save_step)
-    lora_templates = template_obj["lora"]
-    template_obj["lora"] = []
-
-    if append:
-        with open(config_dir, "r", encoding="utf8") as fp:
-            orig_config = json.load(fp)
-        template_obj["lora"] = orig_config["lora"]
-
-    index = len(template_obj["lora"])
-    if multi_task:
-        task_list = [tasks]
-        path_list = [data_path]
-    else:
-        task_list = tasks.split(";")
-        path_list = (
-            [None] * len(task_list) if data_path is None else data_path.split(";")
-        )
-
-    for lora_template in lora_templates:
-        for task_name, data_path in zip(task_list, path_list):
-            lora_config = lora_template.copy()
-            if multi_task:
-                lora_config["name"] = f"multi_task_{index}"
-                lora_config["task_name"] = task_name
-            elif task_name not in moe_peft.tasks.task_dict:
-                try:
-                    load_dataset(task_name)
-                except:
-                    raise RuntimeError(f"Task name '{task_name}' not exist.")
-                lora_config["name"] = f"casual_{index}"
-                lora_config["task_name"] = "casual"
-                lora_config["data"] = task_name
-                lora_config["prompt"] = "alpaca"
-            else:
-                lora_config["name"] = (
-                    f"{task_name.split(':')[-1].replace('-', '_')}_{index}"
-                )
-                lora_config["task_name"] = task_name
-
-            if adapter_name is not None:
-                lora_config["name"] = f"{adapter_name}_{index}"
-
-            update_record(lora_config, "data", data_path)
-            update_record(lora_config, "prompt", prompt_template)
-            update_record(lora_config, "scheduler_type", lr_scheduler)
-            update_record(lora_config, "warmup_steps", warmup_steps)
-            update_record(lora_config, "lr", learning_rate)
-            update_record(lora_config, "batch_size", batch_size)
-            update_record(lora_config, "micro_batch_size", micro_batch_size)
-            update_record(lora_config, "evaluate_steps", evaluate_steps)
-            update_record(lora_config, "evaluate_batch_size", evaluate_batch_size)
-            update_record(lora_config, "num_epochs", num_epochs)
-            update_record(lora_config, "loraplus_lr_ratio", loraplus_lr_ratio)
-            update_record(lora_config, "use_dora", use_dora)
-            update_record(lora_config, "use_rslora", use_rslora)
-            update_record(lora_config, "group_by_length", group_by_length)
-            template_obj["lora"].append(lora_config)
-            index += 1
-
-    with open(config_dir, "w") as f:
-        json.dump(template_obj, f, indent=4)
-    print(f"Configuration file saved to {config_dir}")
-
-
-def avail_tasks():
-    import moe_peft
-
-    print("Available task names:")
-    for name in moe_peft.tasks.task_dict.keys():
-        print(f"    {name}")
-    print("These tasks can be trained and evaluated automatically using MoE-PEFT.")
-
-
-def show_help():
-    print(
-        """
-    Launcher of MoE-PEFT
-    Usage: python launch.py COMMAND [ARGS...]
-    Command:
-        gen         generate a configuration from template
-        run         start a task with existed configuration
-        avail       List all available tasks
-        help        Show help information
-
-    Arguments of gen:
-        --template          lora, mixlora, etc.
-        --tasks             task names separate by ';'
-        --adapter_name      default is task name
-        --file_name         default is 'moe_peft.json'
-        --data_path         path to input data
-        --multi_task        multi-task training
-        --append            append to existed config
-        --prompt_template   [alpaca]
-        --cutoff_len
-        --save_step
-        --warmup_steps
-        --learning_rate
-        --loraplus_lr_ratio
-        --batch_size
-        --micro_batch_size
-        --evaluate_batch_size
-        --num_epochs
-        --use_dora
-        --use_rslora
-        --group_by_length
-
-    Arguments of run:
-        --base_model     model name or path
-        --config         [moe_peft.json]
-        --load_adapter   [false]
-        --random_seed    [42]
-        --cuda_device    [0]
-        --log_file       [moe_peft.log]
-        --overwrite      [false]
-        --attn_impl      [eager]
-        --sliding_window [false]
-        --use_cache      [true]
-        --quantize       [none], 4bit, 8bit
-        --dtype          [bf16], fp16, fp32
-        --tf32           [false]
+    command = f"""
+        CUDA_VISIBLE_DEVICES={cuda_device}
+        python moe_peft.py \
+            --base_model {base_model}
+            --config {config}
+            --log_file {log_file}
+            --seed {random_seed}
+            --attn_impl {attn_impl}
+            --dtype {dtype}
     """
-    )
+
+
+def choose_file():
+    config_files = os.listdir(CONFIG_SAVING_PATH)
+    file_names = [
+        f for f in config_files if os.path.isfile(os.path.join(CONFIG_SAVING_PATH, f))
+                                   and f.endswith('.json')
+    ]
+
+    if len(file_names) == 0:
+        print_red("No config files currently!")
+        selected_file = None
+    else:
+        print_green("Current config files:")
+        for index, file_name in enumerate(file_names):
+            print(f"{index}: {file_name}")
+
+        while True:
+            try:
+                user_input = input(f"\n? Which file you choose to run: ")
+                selected_index = int(user_input)
+                if 0 <= selected_index < len(file_names):
+                    selected_file = file_names[selected_index]
+                    break
+                else:
+                    print_red(f"Plz input a valid index between 0 and {len(file_names) - 1}!")
+            except ValueError:
+                print_red("Invalid input type!")
+    return selected_file
+
+
+def run_command():
+    config_file = choose_file()
+    if config_file is None:
+        return
+
+    command = compose(...)
+    os.system(command)
+
+
+def show_help(*args, **kwargs):
+    # TODO: Complete func::show_help.
+    return
 
 
 command_map = {
-    "gen": gen_config,
-    "run": compose_command,
-    "avail": avail_tasks,
+    "gen": generate_config,
+    "run": run_command,
     "help": show_help,
 }
 
@@ -247,5 +242,5 @@ def main(command: str = "help", *args, **kwargs):
     command_map[command](*args, **kwargs)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     fire.Fire(main)
